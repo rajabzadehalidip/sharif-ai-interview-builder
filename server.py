@@ -314,7 +314,7 @@ def public_project():
 
 
 @app.get('/admin/settings/pre-interview-default')
-def pre_interview_defaults(sharif_team_session: str | None = Cookie(default=None)):
+def pre_interview_defaults(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     return default_pre_interview_form()
 
@@ -451,18 +451,18 @@ def logout(response: Response):
 
 
 @app.get("/auth/me")
-def who_am_i(sharif_team_session: str | None = Cookie(default=None)):
+def who_am_i(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     return _current_staff(sharif_team_session)
 
 
 @app.get("/admin/sessions")
-def list_sessions(sharif_team_session: str | None = Cookie(default=None)):
+def list_sessions(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     _current_staff(sharif_team_session)
     return [_session_summary(data) for data in _all_sessions()]
 
 
 @app.get("/admin/sessions/{session_id}")
-def admin_session(session_id: str, sharif_team_session: str | None = Cookie(default=None)):
+def admin_session(session_id: str, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     staff = _current_staff(sharif_team_session)
     data = load(session_id).public()
     # Team members review the transcript but not internal decision/audit logs or usage details.
@@ -477,12 +477,12 @@ def admin_session(session_id: str, sharif_team_session: str | None = Cookie(defa
 
 
 @app.get("/admin/export.json")
-def export_sessions(sharif_team_session: str | None = Cookie(default=None)):
+def export_sessions(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     return _export_records(ExportSelection(), sharif_team_session)
 
 
 @app.post("/admin/export.json")
-def export_selected_sessions(body: ExportSelection, sharif_team_session: str | None = Cookie(default=None)):
+def export_selected_sessions(body: ExportSelection, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     return _export_records(body, sharif_team_session)
 
 
@@ -515,7 +515,7 @@ def _csv_value(value) -> str:
 
 
 @app.post('/admin/export.csv')
-def export_csv(body: ExportSelection, sharif_team_session: str | None = Cookie(default=None)):
+def export_csv(body: ExportSelection, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     """One interview per row, with the entire transcript retained as text/JSON.
 
     CSV is intentionally flat for Excel/SPSS; JSON remains the archival export.
@@ -572,7 +572,7 @@ def export_csv(body: ExportSelection, sharif_team_session: str | None = Cookie(d
 
 
 @app.post('/admin/export.architecture.csv')
-def export_architecture_csv(body: ExportSelection, sharif_team_session: str | None = Cookie(default=None)):
+def export_architecture_csv(body: ExportSelection, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     """One row per actual architecture attempt, for reliability/model analysis."""
     records = _export_records(body, sharif_team_session)
     columns = [
@@ -601,7 +601,7 @@ def export_architecture_csv(body: ExportSelection, sharif_team_session: str | No
     )
 
 @app.get("/admin/settings")
-def read_settings(sharif_team_session: str | None = Cookie(default=None)):
+def read_settings(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     staff = require_admin(sharif_team_session)
     result = current_settings()
     with closing(sqlite3.connect(DB_PATH)) as db:
@@ -610,7 +610,7 @@ def read_settings(sharif_team_session: str | None = Cookie(default=None)):
     return {**result, "draft": json.loads(draft[0]) if draft else None, "history": [{"version": v, "author": a, "created_at": t} for v,a,t in history]}
 
 @app.put("/admin/settings/draft")
-def save_draft(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None)):
+def save_draft(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     staff = require_admin(sharif_team_session)
     settings_payload(body)
     with closing(sqlite3.connect(DB_PATH)) as db:
@@ -619,7 +619,7 @@ def save_draft(body: InterviewSettings, sharif_team_session: str | None = Cookie
     return {"ok": True}
 
 @app.post("/admin/settings/publish")
-def publish_settings(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None)):
+def publish_settings(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     staff = require_admin(sharif_team_session)
     payload = settings_payload(body)
     with closing(sqlite3.connect(DB_PATH)) as db:
@@ -633,7 +633,7 @@ def publish_settings(body: InterviewSettings, sharif_team_session: str | None = 
         return {"version": cursor.lastrowid}
 
 @app.get("/admin/settings/versions/{version}")
-def settings_version(version: int, sharif_team_session: str | None = Cookie(default=None)):
+def settings_version(version: int, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     with closing(sqlite3.connect(DB_PATH)) as db:
         row = db.execute("SELECT payload FROM settings_versions WHERE version=?", (version,)).fetchone()
@@ -655,7 +655,7 @@ def notes_for(session_id):
         return [dict(r) for r in db.execute('SELECT * FROM review_notes WHERE session_id=? ORDER BY created_at', (session_id,))]
 
 @app.get('/admin/reviews/{session_id}')
-def get_reviews(session_id: str, sharif_team_session: str | None = Cookie(default=None)):
+def get_reviews(session_id: str, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     _current_staff(sharif_team_session)
     return {'suggestions':operations.review_flags(load(session_id)), 'notes': notes_for(session_id)}
 
@@ -670,19 +670,19 @@ def insert_review(session_id, body, author, source='human'):
     return {'id':note_id}
 
 @app.post('/admin/reviews/{session_id}')
-def add_review(session_id: str, body: ReviewNote, sharif_team_session: str | None = Cookie(default=None)):
+def add_review(session_id: str, body: ReviewNote, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     staff = _current_staff(sharif_team_session)
     return insert_review(session_id,body,staff['username'])
 
 @app.put('/admin/review-notes/{note_id}')
-def update_review(note_id: str, body: ReviewStatus, sharif_team_session: str | None = Cookie(default=None)):
+def update_review(note_id: str, body: ReviewStatus, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     _current_staff(sharif_team_session)
     with closing(sqlite3.connect(DB_PATH)) as db:
         db.execute('UPDATE review_notes SET status=? WHERE id=?', (body.status,note_id)); db.commit()
     return {'ok':True}
 
 @app.post('/admin/reviews/{session_id}/analyze')
-def analyze_review(session_id: str, sharif_team_session: str | None = Cookie(default=None)):
+def analyze_review(session_id: str, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     staff = require_admin(sharif_team_session)
     session = load(session_id)
     token = engine.ACTIVE_SETTINGS.set(session.settings_snapshot)
@@ -705,36 +705,36 @@ def analyze_review(session_id: str, sharif_team_session: str | None = Cookie(def
         engine.ACTIVE_SETTINGS.reset(token)
 
 @app.get('/admin/backups')
-def list_backups(sharif_team_session: str | None = Cookie(default=None)):
+def list_backups(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     folder = Path(DB_PATH).resolve().parent / 'backups'
     return [{'name':p.name,'bytes':p.stat().st_size,'created_at':datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat()} for p in sorted(folder.glob('*.sqlite'), reverse=True)]
 
 @app.post('/admin/backups')
-def create_backup(sharif_team_session: str | None = Cookie(default=None)):
+def create_backup(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     return operations.snapshot(DB_PATH)
 
 @app.get('/admin/backups/{name}/download')
-def download_backup(name: str, sharif_team_session: str | None = Cookie(default=None)):
+def download_backup(name: str, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     try: return FileResponse(operations.backup_path(DB_PATH,name), filename=name, media_type='application/octet-stream')
     except ValueError: raise HTTPException(404,'نسخه پیدا نشد')
 
 @app.get('/admin/backups/{name}/restore-preview')
-def preview_restore(name: str, sharif_team_session: str | None = Cookie(default=None)):
+def preview_restore(name: str, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     try: return operations.restore_missing(DB_PATH,name)
     except ValueError: raise HTTPException(422,'نسخه قابل بازیابی نیست')
 
 @app.post('/admin/backups/{name}/restore-missing')
-def restore_backup(name: str, sharif_team_session: str | None = Cookie(default=None)):
+def restore_backup(name: str, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     try: return operations.restore_missing(DB_PATH,name,apply=True)
     except ValueError: raise HTTPException(422,'نسخه قابل بازیابی نیست')
 
 @app.post("/admin/settings/test")
-def test_settings(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None)):
+def test_settings(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
     require_admin(sharif_team_session)
     session = new_session()
     configure_session(session, settings_payload(body))
