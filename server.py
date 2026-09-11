@@ -299,7 +299,7 @@ def startup():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "shared-interview-engine", "protocol_version": PROTOCOL_VERSION, "metadata_schema_version": "1.0", "architecture_telemetry_schema_version": "1.0", "release": "pilot-reliability-3"}
+    return {"ok": True, "service": "shared-interview-engine", "protocol_version": PROTOCOL_VERSION, "metadata_schema_version": "1.0", "architecture_telemetry_schema_version": "1.0", "release": "builder-4-gpt5-reasoning"}
 
 
 @app.get('/public/pre-interview-form')
