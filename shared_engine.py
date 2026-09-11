@@ -20,7 +20,14 @@ DEFAULT_GOALS = {
     "Q1": "هدف، مفهوم و نوع پاسخ موردنیاز این پرسش را در پنل توضیح دهید.",
     "Q2": "دعوت اختیاری پایانی است؛ پاسخ مثبت یعنی فرد می‌خواهد نکته‌اش را بنویسد، نه این‌که گفت‌وگو تمام شود.",
 }
-PROTOCOL_VERSION = "1.0-interview-builder"
+PROTOCOL_VERSION = "2.0-semantic-interview-builder"
+SEMANTIC_PROTOCOL_VERSION = "2.0-semantic-interview"
+SEMANTIC_INTENTS = {
+    "social_greeting", "process_question", "role_boundary_question",
+    "research_answer", "clarification_request", "example_request",
+    "options_request", "opinion_request", "refusal", "continuation",
+    "backtrack", "disengagement", "termination",
+}
 
 # This protocol, planner contract, and interviewer contract intentionally mirror
 # the Android Pilot.  The web app must not call a single model to both reason
@@ -33,11 +40,16 @@ INTERVIEWER_SYSTEM = BASE_PROTOCOL + """\n\nWrite only the participant-facing me
 
 FAST_GUIDED_SYSTEM = BASE_PROTOCOL + """\n\nAct as moderator and interviewer. Return only valid JSON: {"action":"advance|probe|simplify|repeat|repair|close","message":"participant-facing text only when needed","terminationIntent":"none|explicit","engagement":"engaged|possible_mocking|disengaged","reason":"brief label"}. Use the configured study language."""
 
+SEMANTIC_CONTROLLER_CONTRACT = """\n\nSemantic controller v2. Before routing every message, classify one intent: social_greeting, process_question, role_boundary_question, research_answer, clarification_request, example_request, options_request, opinion_request, refusal, continuation, backtrack, disengagement, termination. Return a short meaning_summary, is_research_evidence, evidence_quotes, current_question_open, next_action, and confidence in addition to action. Social, process, role-boundary, clarification, example, options, opinion, and continuation turns are not research evidence and keep the current question open. Answer process questions only from STUDY METADATA. If asked for your personal view, state that you are the interviewer and have no independent personal position, then return control to the participant. Short meaningful answers are evidence. Offer genuinely different simplifications, up to three meaningful attempts and one skip offer. Do not expose reasoning or internal labels."""
+PLANNER_SYSTEM += SEMANTIC_CONTROLLER_CONTRACT
+FAST_GUIDED_SYSTEM += SEMANTIC_CONTROLLER_CONTRACT
+
 # The autonomous option uses the same provider-neutral engine but gives the
 # model more room to use recent context when selecting one purposeful probe.
 # Question order, consent, and participant-safety boundaries remain enforced
 # by the server rather than delegated to the model.
 CONVERSATIONAL_LEAD_SYSTEM = BASE_PROTOCOL + """\n\nAct as a conversational research lead. Return only valid JSON: {"action":"advance|probe|simplify|repeat|repair|close","focus":"brief necessary gap or empty","terminationIntent":"none|explicit","engagement":"engaged|possible_mocking|disengaged","reason":"brief label"}. Preserve the client's question order and goals. Use the recent transcript and prior answers to avoid repetition, respond to greetings or clarification requests naturally, and ask a purposeful follow-up only when it adds evidence. A clear answer advances; a request for simplification receives a genuinely different rephrasing; an explicit refusal skips without probing. Do not reveal reasoning or invent participant meaning."""
+CONVERSATIONAL_LEAD_SYSTEM += SEMANTIC_CONTROLLER_CONTRACT
 
 ALLOWED_ACTIONS = {"advance", "probe", "simplify", "repeat", "repair", "close"}
 ACTIVE_SETTINGS = ContextVar("interview_settings", default={})
@@ -72,6 +84,7 @@ def configure_session(session, settings, version=0):
 
 def default_settings():
     return {"project_title": "مصاحبه پژوهشی",
+            "study_metadata": {"title": "مصاحبه پژوهشی", "purpose": "این گفت‌وگو برای فهم دیدگاه و تجربهٔ شما انجام می‌شود.", "interviewer_role": "مصاحبه‌گر این پژوهش", "duration": "مدت زمان اعلام‌شده در پروتکل", "storage_statement": "پاسخ‌ها برای تحلیل همین مطالعه ثبت می‌شوند."},
             "welcome_text": "این گفت‌وگو بر اساس پروتکلی انجام می‌شود که پژوهشگر منتشر کرده است.",
             "consent_text": "شرکت در این گفت‌وگو داوطلبانه است. می‌توانید از هر پرسش بگذرید یا هر زمان گفت‌وگو را پایان دهید.",
             "participant_language": "فارسی",
@@ -87,7 +100,9 @@ def default_settings():
 def configured_prompt(original):
     cfg = ACTIVE_SETTINGS.get()
     key = {PLANNER_SYSTEM: "planner_prompt", INTERVIEWER_SYSTEM: "interviewer_prompt", FAST_GUIDED_SYSTEM: "fast_prompt", CONVERSATIONAL_LEAD_SYSTEM: "lead_prompt"}.get(original)
-    return cfg["base_prompt"] + "\n\n" + cfg[key] if key and cfg else original
+    if not key or not cfg:
+        return original
+    return cfg["base_prompt"] + "\n\n" + cfg[key] + "\n\nPROTECTED CORE (not editable in the panel):\n" + BASE_PROTOCOL + SEMANTIC_CONTROLLER_CONTRACT
 
 def _architecture() -> str:
     value = os.getenv("INTERVIEW_ARCHITECTURE", "multi_agent_lite").strip().lower()
@@ -138,6 +153,13 @@ class InterviewSession:
     disengagement_notices: int = 0
     # The final open invitation is conversational, not a yes/no terminator.
     final_invitation_stage: int = 0
+    semantic_state: dict[str, Any] = field(default_factory=dict)
+    semantic_ledger: dict[str, dict[str, Any]] = field(default_factory=dict)
+    context_summary: str = ""
+    context_summary_version: str = SEMANTIC_PROTOCOL_VERSION
+    semantic_turn_count: int = 0
+    social_turn_count: int = 0
+    non_evidence_turn_count: int = 0
 
     def public(self) -> dict[str, Any]:
         result = asdict(self)
@@ -182,6 +204,11 @@ class InterviewSession:
             "questions_with_responses": sorted({m['question_id'] for m in self.messages if m.get('role') == 'user' and m.get('question_id')}),
             "recorded_model_calls": len(calls),
             "failed_model_calls": sum(c.get('status') == 'error' for c in calls),
+            "semantic_protocol_version": SEMANTIC_PROTOCOL_VERSION,
+            "context_summary_version": self.context_summary_version,
+            "semantic_turn_count": self.semantic_turn_count,
+            "social_turn_count": self.social_turn_count,
+            "non_evidence_turn_count": self.non_evidence_turn_count,
             "fallback_turns": sum(bool(d.get('recovered')) for d in self.decision_log),
             "architecture_execution": {
                 "telemetry_schema_version": "1.0",
@@ -204,6 +231,9 @@ class InterviewSession:
             "calls_with_usage": len(usage),
             "cost_note": "Provider-reported only; missing charges and failed calls may be unreported. Not an invoice or complete cost guarantee.",
             "capture_note": "Per-call capture available only from metadata schema 1.0; older timestamps and model versions are not reconstructed. Returned model IDs may be aliases, not immutable versions.",
+            "context_summary": self.context_summary,
+            "semantic_state": self.semantic_state,
+            "semantic_ledger": self.semantic_ledger,
         }
         return result
 
@@ -338,17 +368,30 @@ def _evidence_ledger(session: InterviewSession) -> str:
         return "هنوز شاهدی ثبت نشده است."
     return "\n".join(f"- {qid}: {text}" for qid, text in latest_by_question.items())
 
+def _semantic_ledger_text(session: InterviewSession) -> str:
+    if not session.semantic_ledger:
+        return "none"
+    return "\n".join(
+        f"- {qid}: state={item.get('state','unknown')}; intent={item.get('intent','research_answer')}; "
+        f"meaning={str(item.get('meaning_summary',''))[:180]}; missing={str(item.get('missing_evidence',''))[:140]}; "
+        f"follow_ups={item.get('follow_up_count', 0)}"
+        for qid, item in list(session.semantic_ledger.items())[-24:]
+    )
+
 
 def _model_context(session: InterviewSession) -> list[str]:
     pre = [f"{key}: {value}" for key, value in session.pre_interview.items()]
-    recent = session.messages[-16:]
+    recent = session.messages[-8:]
     conversation = [f"{message['role']}: {message['content']}" for message in recent]
     return [
         "شناسه دعوت پایانی در نسخه فعلی: " + questions()[-1][0] + " (هر اشاره قدیمی به Q13 به همین دعوت پایانی اشاره دارد).",
         "کنترل صریح کاربر: " + str((session.pending_turn or {}).get('control', 'answer')) + ". اگر clarify است فقط همان سؤال را ساده‌تر کن؛ پیشروی یا پایان نده.",
         "وضع مشارکت: " + ("یک یادآوری محترمانهٔ مرتبط‌ماندن با گفت‌وگو قبلاً داده شده است." if session.disengagement_notices else "یادآوری مرتبط‌ماندن هنوز داده نشده است."),
+        "STUDY METADATA (only source for process answers):\n" + json.dumps(session.settings_snapshot.get("study_metadata", {}), ensure_ascii=False),
         "پیش‌مصاحبه:\n" + ("\n".join(pre) or "ثبت نشده"),
+        "دفتر معنایی فشرده:\n" + _semantic_ledger_text(session),
         "دفتر شواهدِ پاسخ‌های پیشین (هر مورد از متن خود فرد است):\n" + _evidence_ledger(session),
+        "خلاصهٔ دوره‌ای زمینه:\n" + (session.context_summary or "none"),
         "بخش اخیر گفت‌وگو:\n" + "\n".join(conversation),
     ]
 
@@ -495,6 +538,23 @@ def _model_text(session: InterviewSession, answer: str, *, system: str, prompt: 
         raise RuntimeError("empty interviewer response")
     return content.strip(), data.get("usage", {})
 
+def _maybe_refresh_context_summary(session: InterviewSession) -> None:
+    if not _key() or session.semantic_turn_count < 4 or session.semantic_turn_count % 4 != 0:
+        return
+    try:
+        response = _tracked_request(
+            session, _endpoint(),
+            headers={"Authorization": f"Bearer {_key()}", "Content-Type": "application/json", "X-Client-Request-ID": str(uuid.uuid4())},
+            json={"model": _model(), "messages": [{"role": "system", "content": "Summarize the structured interview ledger in concise factual Persian. Do not infer or add opinions."}, {"role": "user", "content": _semantic_ledger_text(session)}], "temperature": 0.1, "max_tokens": 180},
+            timeout=min(8, _wait_seconds("INTERVIEW_FAST_GUIDED_WAIT_SECONDS", 8)), role="memory", architecture=session.architecture, stage="context_summary"
+        )
+        text = response.json().get("choices", [{}])[0].get("message", {}).get("content")
+        if text and text.strip():
+            session.context_summary = text.strip()[:1200]
+            session.context_summary_version = SEMANTIC_PROTOCOL_VERSION
+    except Exception:
+        return
+
 def new_session(pre_interview: dict[str, str] | None = None) -> InterviewSession:
     session = InterviewSession(pre_interview=pre_interview or {}, architecture=_architecture())
     session.metadata_schema_version = '1.0'
@@ -555,10 +615,76 @@ def _record_decision(session: InterviewSession, turn_id: str, question_id: str, 
         "evidence_present": decision.get("evidence_present"),
         "evidence_gap": decision.get("evidence_gap"),
         "engagement": decision.get("engagement", "engaged"),
+        "intent": _semantic_intent(decision),
+        "is_research_evidence": bool(decision.get("is_research_evidence", _semantic_intent(decision) == "research_answer")),
+        "meaning_summary": decision.get("meaning_summary"),
+        "current_question_open": decision.get("current_question_open"),
+        "next_action": decision.get("next_action", decision.get("action")),
+        "confidence": decision.get("confidence"),
+        "evidence_quotes": decision.get("evidence_quotes", []),
         "execution_mode": decision.get("_execution_mode", session.architecture),
         "recovered": recovered,
         "at": datetime.now(timezone.utc).isoformat(),
     })
+
+def _semantic_intent(decision: dict[str, Any], default: str = "research_answer") -> str:
+    value = str(decision.get("intent", default)).strip().lower()
+    return value if value in SEMANTIC_INTENTS else default
+
+def _normalize_semantic_decision(decision: dict[str, Any], answer: str, session: InterviewSession) -> dict[str, Any]:
+    if not decision.get("intent") and decision.get("control_turn"):
+        reason = _normalize(str(decision.get("reason", "")))
+        inferred = "clarification_request"
+        if "social" in reason or _social_opening(answer): inferred = "social_greeting"
+        elif "role" in reason: inferred = "role_boundary_question"
+        elif "example" in reason: inferred = "example_request"
+        elif "recall" in reason or "backtrack" in reason: inferred = "backtrack"
+        elif "interview" in reason or "date" in reason or "process" in reason: inferred = "process_question"
+        decision["intent"] = inferred
+    intent = _semantic_intent(decision)
+    decision["intent"] = intent
+    decision["is_research_evidence"] = bool(decision.get("is_research_evidence", intent == "research_answer"))
+    decision["meaning_summary"] = str(decision.get("meaning_summary", ""))[:300]
+    quotes = decision.get("evidence_quotes", decision.get("source_evidence_quotes", decision.get("evidence_used", [])))
+    decision["evidence_quotes"] = [str(q)[:180] for q in quotes[:3]] if isinstance(quotes, list) else []
+    decision["current_question_open"] = bool(decision.get("current_question_open", intent != "termination"))
+    if intent in {"social_greeting", "process_question", "role_boundary_question", "clarification_request", "example_request", "options_request", "opinion_request", "continuation"}:
+        decision["is_research_evidence"] = False
+        decision["current_question_open"] = True
+        if str(decision.get("action", "")).lower() in {"advance", "skip", "close"}:
+            decision["action"] = "repair"
+    if intent == "termination":
+        decision["terminationIntent"] = "explicit"
+    if intent == "refusal":
+        decision["is_research_evidence"] = False
+        decision["action"] = "advance"
+    try:
+        decision["confidence"] = min(1.0, max(0.0, float(decision.get("confidence", 0.5))))
+    except (TypeError, ValueError):
+        decision["confidence"] = 0.5
+    return decision
+
+def _update_semantic_state(session: InterviewSession, question_id: str, answer: str, decision: dict[str, Any]) -> None:
+    intent = _semantic_intent(decision)
+    is_evidence = bool(decision.get("is_research_evidence", intent == "research_answer"))
+    item = session.semantic_ledger.setdefault(question_id, {"state": "unanswered", "meaning_summary": "", "missing_evidence": "", "follow_up_count": 0, "intents": [], "evidence_quotes": []})
+    item["intent"] = intent
+    item["state"] = "answered" if str(decision.get("action")) in {"advance", "skip"} and is_evidence else ("declined" if intent == "refusal" else str(decision.get("current_question_state", "continue")))
+    item["meaning_summary"] = str(decision.get("meaning_summary") or item.get("meaning_summary") or answer[:240])[:300]
+    item["missing_evidence"] = str(decision.get("evidence_gap") or decision.get("missing_slot") or "")[:180]
+    item["follow_up_count"] = int(decision.get("follow_up_count", item.get("follow_up_count", 0)) or 0)
+    item["intents"] = list(dict.fromkeys([*(item.get("intents") or []), intent]))[-8:]
+    item["evidence_quotes"] = list(dict.fromkeys([*(item.get("evidence_quotes") or []), *decision.get("evidence_quotes", [])]))[-6:]
+    session.semantic_state = {"intent": intent, "meaning_summary": item["meaning_summary"], "is_research_evidence": is_evidence, "current_question_open": bool(decision.get("current_question_open", True)), "next_action": decision.get("next_action", decision.get("action")), "confidence": decision.get("confidence"), "evidence_quotes": decision.get("evidence_quotes", []), "question_id": question_id}
+    session.semantic_turn_count += 1
+    if not is_evidence: session.non_evidence_turn_count += 1
+    if intent == "social_greeting": session.social_turn_count += 1
+    for message in reversed(session.messages):
+        if message.get("role") == "user" and message.get("content") == answer:
+            message["semantic_intent"] = intent
+            message["is_research_evidence"] = is_evidence
+            message["meaning_summary"] = item["meaning_summary"]
+            break
 
 
 def _failure_code(error: Exception) -> str:
@@ -610,12 +736,25 @@ def _asks_for_today(text: str) -> bool:
     low = _normalize(text)
     return any(phrase in low for phrase in ("امروز چند شنبه", "امروز چه روزی", "امروز چندمه", "امروز چه تاریخه", "امروز چه تاریخ"))
 
+def _asks_for_role_boundary(text: str) -> bool:
+    low = _normalize(text)
+    return any(marker in low for marker in ("نظر خودت", "نظر شما چیه", "تو چی فکر", "خودت موافقی", "به نظرت", "توصیه میکنی", "پیشنهادت چیه"))
+
 
 def _asks_for_recall(text: str) -> bool:
     low = _normalize(text)
     return any(phrase in low for phrase in (
         "یادت هست", "یادته", "یادم هست", "از اول تا حالا چی گفتم",
         "چی گفتم", "حرفایی که زدم", "حرف هایی که زدم", "حرف‌هایی که زدم",
+    ))
+
+def _asks_for_process(text: str) -> bool:
+    """Recognize study-process questions without guessing project facts."""
+    low = _normalize(text)
+    return any(marker in low for marker in (
+        "این مصاحبه", "هدف این", "چقدر طول", "چند دقیقه", "پاسخ ها کجا",
+        "پاسخ‌ها کجا", "جواب ها کجا", "جواب‌ها کجا", "ذخیره", "محرمانه",
+        "چه کسی هستی", "شما کی هستید", "برای چیست", "برای چیه",
     ))
 
 
@@ -665,6 +804,23 @@ def _participant_control_turn(session: InterviewSession, answer: str, index: int
             "participant_turn": f"امروز {weekdays[now.weekday()]} است. هر زمان آماده بودید، پاسخ به همین پرسش را ادامه دهید.",
             "reason": "participant asked for current date",
         }
+    if _social_opening(answer):
+        if session.social_turn_count >= 2:
+            return {"action": "repair", "participant_turn": f"برای ادامهٔ مصاحبه، لطفاً به این پرسش پاسخ دهید: {questions()[index][1]}", "reason": "social exchange limit reached", "control_turn": True}
+        return {"action": "repair", "participant_turn": "سلام، خوش آمدید. هر وقت آماده بودید، به پرسش جاری برگردیم.", "reason": "social opening", "control_turn": True}
+    if _asks_for_process(answer):
+        metadata = session.settings_snapshot.get("study_metadata", {}) or {}
+        low = _normalize(answer)
+        if "چقدر طول" in low or "چند دقیقه" in low:
+            detail = metadata.get("duration", "مدت زمان در توضیحات مطالعه اعلام شده است")
+        elif "ذخیره" in low or "محرمانه" in low or "پاسخ" in low or "جواب" in low:
+            detail = metadata.get("storage_statement", "پاسخ‌ها برای تحلیل همین مطالعه ثبت می‌شوند")
+        else:
+            detail = metadata.get("purpose", "این گفت‌وگو برای فهم دیدگاه و تجربهٔ شما انجام می‌شود")
+        return {"action": "repair", "participant_turn": f"{detail} هر وقت آماده بودید، به پرسش جاری برگردیم.", "reason": "participant asked about interview process"}
+    if _asks_for_role_boundary(answer):
+        role = (session.settings_snapshot.get("study_metadata", {}) or {}).get("interviewer_role", "مصاحبه‌گر این پژوهش")
+        return {"action": "repair", "participant_turn": f"من {role} هستم و نظر شخصی یا موضع مستقلی ندارم؛ هدفم شنیدن دیدگاه شماست. اگر مایلید، به پرسش جاری پاسخ دهید یا از آن بگذرید.", "reason": "role boundary question"}
     if _asks_for_recall(answer):
         return {"action": "repair", "participant_turn": _recall_reply(session), "reason": "participant requested conversation recall"}
     if _asks_for_neutral_example(answer, index):
@@ -789,6 +945,7 @@ def _apply_lite_decision(session: InterviewSession, answer: str, decision: dict[
     """Run the Android Lite contract: route first, then independently word it."""
     index = session.question_index
     qid, qtext, _ = questions()[index]
+    decision = _normalize_semantic_decision(decision, answer, session)
     action = str(decision.get("action", "")).lower()
     if action == "pause":
         action = "repair"  # compatibility with transcripts from protocol 3.x
@@ -801,7 +958,7 @@ def _apply_lite_decision(session: InterviewSession, answer: str, decision: dict[
         decision["engagement"] = "disengaged" if session.disengagement_notices else "possible_mocking"
     if action == "close" and not _close_is_permitted(session, decision):
         action = "repair"
-    result = {"action": action, "reason": str(decision.get("reason", "model route")), "focus": str(decision.get("focus", "")), "terminationIntent": decision.get("terminationIntent", "none"), "engagement": decision.get("engagement", "engaged")}
+    result = {"action": action, "reason": str(decision.get("reason", "model route")), "focus": str(decision.get("focus", "")), "terminationIntent": decision.get("terminationIntent", "none"), "engagement": decision.get("engagement", "engaged"), "intent": decision.get("intent"), "is_research_evidence": decision.get("is_research_evidence"), "meaning_summary": decision.get("meaning_summary"), "current_question_open": decision.get("current_question_open"), "next_action": decision.get("next_action", action), "confidence": decision.get("confidence"), "evidence_quotes": decision.get("evidence_quotes", [])}
     if action in {"advance", "close"}:
         return result, None
     fallback = _fallback_participant_turn(action, qtext, result["focus"])
@@ -870,6 +1027,9 @@ def _next_turn(session: InterviewSession, answer: str, turn_id: str | None = Non
     if session.architecture in {"rules_based_simple", "rulesbasedsimple"}:
         trace_started_at, trace_started_perf, trace_call_offset = datetime.now(timezone.utc).isoformat(), time.perf_counter(), len(session.model_calls)
         session = _rules_based_turn(session, answer, index)
+        fallback_intent = "termination" if _explicit_termination(answer) else ("social_greeting" if _social_opening(answer) else ("process_question" if _asks_for_process(answer) else ("role_boundary_question" if _asks_for_role_boundary(answer) else ("refusal" if _normalize(answer) in {"نه", "خیر"} else "research_answer"))))
+        fallback_action = "close" if fallback_intent == "termination" else ("advance" if fallback_intent in {"research_answer", "refusal"} else "repair")
+        _update_semantic_state(session, questions()[index][0], answer, {"intent": fallback_intent, "action": fallback_action, "next_action": fallback_action, "is_research_evidence": fallback_intent == "research_answer", "meaning_summary": answer[:240], "current_question_open": fallback_intent not in {"termination", "refusal"}})
         _record_architecture_attempt(session, turn_id=turn_id, question_id=questions()[index][0],
                                      architecture="rules_based_simple", execution_mode="rules_based_simple",
                                      outcome="success", started_at=trace_started_at, started_perf=trace_started_perf,
@@ -893,7 +1053,7 @@ def _next_turn(session: InterviewSession, answer: str, turn_id: str | None = Non
     if _explicit_termination(answer):
         execution_mode = "participant_control"
         decision = {"action": "close", "reason": "explicit termination", "terminationIntent": "explicit"}
-    elif control_turn := _participant_control_turn(session, answer, index):
+    elif (control_turn := _participant_control_turn(session, answer, index)):
         # Explicit conversational requests are handled before both Lite and
         # Fast Guided. This keeps a temporary model fallback from treating a
         # date, memory check, or request for an example as a missing answer.
@@ -1019,6 +1179,7 @@ def _next_turn(session: InterviewSession, answer: str, turn_id: str | None = Non
                 trace_fallback_from, trace_reason = session.architecture, "hosted_route_failed"
                 trace_started_at, trace_started_perf, trace_call_offset = datetime.now(timezone.utc).isoformat(), time.perf_counter(), len(session.model_calls)
 
+    decision = _normalize_semantic_decision(decision, answer, session)
     action = str(decision.get("action", "advance")).lower()
     if action == "pause":
         action = "repair"
@@ -1063,6 +1224,8 @@ def _next_turn(session: InterviewSession, answer: str, turn_id: str | None = Non
                                  call_offset=trace_call_offset, reason=trace_reason,
                                  fallback_from=trace_fallback_from)
     _record_decision(session, turn_id, qid, decision, recovered)
+    _update_semantic_state(session, qid, answer, decision)
+    _maybe_refresh_context_summary(session)
     session.processed_turn_ids.append(turn_id)
     session.pending_turn = None
     session.updated_at = datetime.now(timezone.utc).isoformat()

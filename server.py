@@ -77,6 +77,7 @@ class PreInterviewQuestionConfig(BaseModel):
 
 class InterviewSettings(BaseModel):
     project_title: str = Field(default="مصاحبه پژوهشی", min_length=2, max_length=200)
+    study_metadata: dict[str, str] = Field(default_factory=dict)
     welcome_text: str = Field(default="این گفت‌وگو بر اساس پروتکلی انجام می‌شود که پژوهشگر منتشر کرده است.", min_length=10, max_length=4000)
     consent_text: str = Field(default="شرکت در این گفت‌وگو داوطلبانه است. می‌توانید از هر پرسش بگذرید یا هر زمان گفت‌وگو را پایان دهید.", min_length=10, max_length=4000)
     participant_language: str = Field(default="فارسی", min_length=2, max_length=80)

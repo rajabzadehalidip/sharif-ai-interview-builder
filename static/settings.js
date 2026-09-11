@@ -32,6 +32,7 @@ settingsPanel.innerHTML = `
     <div class="field"><label for="config-architecture">معماری اصلی</label><select id="config-architecture" name="architecture"><option value="simple_adaptive">Simple Adaptive — یک عامل، پاسخ‌گو و سریع</option><option value="multi_agent_lite">Multi-agent Lite — مدیر و مصاحبه‌گر جدا</option><option value="conversational_lead">Conversational Lead — خودمختاری بیشتر در پیگیری</option></select></div>
     <div class="field"><label for="config-lite">مهلت هر فراخوانی Lite (ثانیه)</label><input id="config-lite" name="lite_timeout" type="number" min="6" max="30" required></div>
     <div class="field"><label for="config-fast">مهلت Fast Guided (ثانیه)</label><input id="config-fast" name="fast_timeout" type="number" min="6" max="30" required></div>
+    <fieldset class="field"><legend>اطلاعات ثابت مطالعه برای پاسخ به پرسش‌های فرایندی</legend><input name="metadata_purpose" id="metadata-purpose" placeholder="هدف مطالعه" maxlength="2000"><input name="metadata_role" id="metadata-role" placeholder="نقش مصاحبه‌گر" maxlength="500"><input name="metadata_duration" id="metadata-duration" placeholder="مدت مصاحبه" maxlength="300"><textarea name="metadata_storage" id="metadata-storage" rows="2" placeholder="نحوه ثبت و استفاده از پاسخ‌ها" maxlength="2000"></textarea></fieldset>
     ${[['base_prompt','دستورالعمل عمومی و اصول حرفه‌ای'],['planner_prompt','Lite — مدیر گفت‌وگو و منطق پیگیری'],['interviewer_prompt','مصاحبه‌گر — لحن و متن روبه‌مشارکت‌کننده'],['fast_prompt','Simple Adaptive — تصمیم و متن سریع'],['lead_prompt','Conversational Lead — دستورالعمل پیگیری خودمختار']].map(([name,label]) => `<div class="field"><label for="config-${name}">${label}</label><textarea id="config-${name}" name="${name}" rows="8" required minlength="20"></textarea></div>`).join('')}</section>
     <section id="settings-questionnaire"><h3>پرسشنامه و منطق مصاحبه</h3><p class="muted small">آخرین پرسش، دعوت پایانی باز با پیگیری صفر است. انشعاب تک‌گزینه‌ای فقط به پرسش‌های بعدی مجاز است.</p><div id="questionnaire-editor"></div><button type="button" id="add-question" class="secondary">افزودن پرسش پیش از دعوت پایانی</button></section>
     <details id="settings-pre-form" class="pre-form-settings" open><summary><strong>فرم پیش از مصاحبه (اختیاری)</strong></summary><p class="muted small">در پروژهٔ تازه، فرم خالی است. در صورت نیاز، پرسش‌های اطلاعات اولیه را خودتان اضافه کنید و منطق نمایش مشروط را تنظیم کنید.</p><div id="pre-interview-editor"></div><div class="actions"><button type="button" id="add-pre-question" class="secondary">افزودن پرسش فرم</button><button type="button" id="restore-pre-defaults" class="quiet">پاک‌کردن فرم</button></div></details>
@@ -57,6 +58,11 @@ function fillSettings(config) {
     const field = document.querySelector('#settings-form').elements.namedItem(key);
     if (field) field.value = value;
   }
+  const meta = config.study_metadata || {};
+  for (const [key,value] of Object.entries({purpose: meta.purpose || '', role: meta.interviewer_role || '', duration: meta.duration || '', storage: meta.storage_statement || ''})) {
+    const field = document.querySelector(`#metadata-${key}`);
+    if (field) field.value = value;
+  }
 }
 function editedSettings() {
   const form = document.querySelector('#settings-form');
@@ -64,6 +70,8 @@ function editedSettings() {
   const result = Object.fromEntries(new FormData(form));
   result.lite_timeout = Number(result.lite_timeout);
   result.fast_timeout = Number(result.fast_timeout);
+  result.study_metadata = {title: result.project_title, purpose: result.metadata_purpose || '', interviewer_role: result.metadata_role || '', duration: result.metadata_duration || '', storage_statement: result.metadata_storage || ''};
+  delete result.metadata_purpose; delete result.metadata_role; delete result.metadata_duration; delete result.metadata_storage;
   result.based_on = settingsBaseVersion;
   collectQuestionnaire(); result.questionnaire = questionnaireDraft;
   collectPreInterviewForm(); result.pre_interview_form = preInterviewDraft;
