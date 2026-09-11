@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.venv/
+venv/
+database/
+*.db
+*.sqlite
+*.sqlite3
+.liara-auth.json

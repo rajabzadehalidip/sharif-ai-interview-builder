@@ -1,0 +1,10 @@
+{
+  "platform": "python",
+  "port": 80,
+  "disks": [
+    {
+      "name": "database",
+      "mountTo": "database"
+    }
+  ]
+}
