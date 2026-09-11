@@ -274,6 +274,28 @@ def _model() -> str:
         return os.getenv("INTERVIEW_MODEL", "").strip() or os.getenv("GAPGPT_MODEL", "").strip() or "gpt-5-nano"
     return os.getenv("INTERVIEW_MODEL", "openai/gpt-5-nano")
 
+
+def _generation_options(max_tokens: int, *, participant_text: bool = False) -> dict[str, Any]:
+    """Return provider-safe generation settings for reasoning models.
+
+    GPT-5 models exposed through OpenAI-compatible gateways may spend the
+    entire small ``max_tokens`` budget on hidden reasoning.  The gateway then
+    returns a successful HTTP response with an empty ``message.content`` and
+    ``finish_reason=length``.  That used to look like a provider outage and
+    incorrectly sent a live interview to the final recovery route.  Keep the
+    normal budget for other models, but ask GPT-5 for low reasoning effort and
+    enough completion headroom for the visible JSON/Persian turn.
+
+    The option is deliberately model-gated: many third-party models reject
+    ``reasoning_effort`` as an unknown request field.
+    """
+    model = _model().strip().lower()
+    is_gpt5_reasoning = "gpt-5" in model or model.startswith(("o1", "o3", "o4"))
+    if not is_gpt5_reasoning:
+        return {"max_tokens": max_tokens}
+    floor = 700 if participant_text else 900
+    return {"reasoning_effort": "low", "max_tokens": max(max_tokens, floor)}
+
 def _meaningful_q1(text: str) -> bool:
     low = text.strip().lower()
     if len(low) < 2 or low in {"بله", "خیر", "نه", "نمی‌دانم", "نمیدانم", "سلام", "آماده"}:
@@ -415,7 +437,8 @@ def _model_decision(
     is_fast_guided = active_mode in {"fast_guided", "fastguided"}
     system = system_override or (FAST_GUIDED_SYSTEM if is_fast_guided else PLANNER_SYSTEM)
     system = configured_prompt(system)
-    payload = {"model": _model(), "messages": [{"role":"system", "content":system}, {"role":"user", "content":"\n\n".join(context)}], "temperature":0.25 if is_fast_guided else 0.35, "max_tokens":max_tokens or (320 if is_fast_guided else 420)}
+    payload = {"model": _model(), "messages": [{"role":"system", "content":system}, {"role":"user", "content":"\n\n".join(context)}], "temperature":0.25 if is_fast_guided else 0.35}
+    payload.update(_generation_options(max_tokens or (320 if is_fast_guided else 420)))
     last = None
     timeout = timeout_seconds if timeout_seconds is not None else _wait_seconds("INTERVIEW_TURN_TIMEOUT", 22)
     request_id = session.pending_turn.get("id") if session.pending_turn else str(uuid.uuid4())
@@ -461,7 +484,7 @@ def _model_text(session: InterviewSession, answer: str, *, system: str, prompt: 
         headers["X-Title"] = "AI Interview Builder"
     response = _tracked_request(
         session, _endpoint(), headers=headers, role='interviewer', architecture=mode, stage='participant_wording',
-        json={"model": _model(), "messages": [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(context)}], "temperature": 0.35, "max_tokens": 260},
+        json={"model": _model(), "messages": [{"role": "system", "content": system}, {"role": "user", "content": "\n\n".join(context)}], "temperature": 0.35, **_generation_options(260, participant_text=True)},
         timeout=timeout_seconds,
     )
     response.raise_for_status()
