@@ -61,15 +61,18 @@ function renderQuestionnaire() {
     <div class="field"><label>متن پرسش<textarea data-q="text" rows="2" required>${escapeHtml(q.text)}</textarea></label></div>
     <div class="field"><label>هدف و کفایت پاسخ<textarea data-q="goal" rows="2" required>${escapeHtml(q.goal)}</textarea></label></div>
     <div class="field"><label>نوع پاسخ<select data-q="kind">${[['open','باز'],['single','تک‌گزینه‌ای'],['multiple','چندگزینه‌ای']].map(([v,t])=>`<option value="${v}" ${q.kind===v?'selected':''}>${t}</option>`).join('')}</select></label></div>
-    <div class="field"><label>سقف پیگیری<input data-q="probe_limit" type="number" min="0" max="5" value="${q.probe_limit}" required></label></div>
+    <div class="field"><label>حداکثر پیگیری هدفمند<input data-q="probe_limit" type="number" min="0" max="5" value="${q.probe_limit}" required></label><p class="muted small">۰ یعنی پس از پاسخ، پرسش بعدی مطرح می‌شود. این سقف است، نه اجبار به پیگیری.</p></div>
+    <div class="field"><label>پیشنهادهای پیگیریِ احتمالی — هر مورد در یک خط<textarea data-q="probe_hints" rows="3" placeholder="مثلاً: اگر تجربهٔ مشخصی گفتید، یک نمونه را توضیح می‌دهید؟">${escapeHtml((q.probe_hints || []).join('\n'))}</textarea></label><p class="muted small">این‌ها بانک پیشنهادی برای مدل‌اند؛ فقط وقتی پاسخ برای هدف همین پرسش شکاف ضروری داشته باشد استفاده می‌شوند.</p></div>
     ${q.kind!=='open'?`<div class="field"><label>گزینه‌ها — هر گزینه در یک خط<textarea data-q="options" rows="4">${escapeHtml(q.options.join('\n'))}</textarea></label></div>`:''}
     ${q.kind==='single'?q.options.map((option,oi)=>`<div class="field"><label>پس از «${escapeHtml(option)}»<select data-branch="${oi}"><option value="">پرسش بعدی</option>${questionnaireDraft.slice(index+1).map(target=>`<option value="${escapeHtml(target.id)}" ${q.branches?.[option]===target.id?'selected':''}>${escapeHtml(target.text)}</option>`).join('')}</select></label></div>`).join(''):''}
     <div class="actions"><button class="secondary" type="button" data-move="-1" ${index===0 || index===questionnaireDraft.length-1?'disabled':''}>بالاتر</button><button class="secondary" type="button" data-move="1" ${index>=questionnaireDraft.length-2?'disabled':''}>پایین‌تر</button><button class="quiet" type="button" data-delete ${index===questionnaireDraft.length-1?'disabled':''}>حذف از پیش‌نویس</button></div></details>`).join('');
 }
 function collectQuestionnaire() {
-  document.querySelectorAll('.question-edit').forEach(box=>{
+  // The pre-interview editor has the same visual class.  Scope collection to
+  // the interview instrument so adding a question never crashes on a form row.
+  document.querySelectorAll('#questionnaire-editor .question-edit[data-index]').forEach(box=>{
     const q=questionnaireDraft[Number(box.dataset.index)];
-    box.querySelectorAll('[data-q]').forEach(input=>{const k=input.dataset.q; q[k]= k==='probe_limit'?Number(input.value):k==='options'?input.value.split('\n').map(x=>x.trim()).filter(Boolean):input.value;});
+    box.querySelectorAll('[data-q]').forEach(input=>{const k=input.dataset.q; q[k]= k==='probe_limit'?Number(input.value):['options','probe_hints'].includes(k)?input.value.split('\n').map(x=>x.trim()).filter(Boolean):input.value;});
     q.branches={}; if(q.kind==='single') box.querySelectorAll('[data-branch]').forEach(select=>{if(select.value && q.options[Number(select.dataset.branch)]) q.branches[q.options[Number(select.dataset.branch)]]=select.value;});
     if(q.kind==='open') q.options=[];
   });
@@ -84,7 +87,7 @@ $('#questionnaire-editor').addEventListener('click',event=>{
   else {const dest=index+Number(button.dataset.move);[questionnaireDraft[index],questionnaireDraft[dest]]=[questionnaireDraft[dest],questionnaireDraft[index]];}
   renderQuestionnaire();
 });
-$('#add-question').addEventListener('click',()=>{collectQuestionnaire();questionnaireDraft.splice(Math.max(0,questionnaireDraft.length-1),0,{id:'Q_'+crypto.randomUUID().slice(0,8),text:'پرسش جدید',goal:'هدف این پرسش را توضیح دهید',kind:'open',options:[],probe_limit:1,branches:{}});renderQuestionnaire();});
+$('#add-question').addEventListener('click',()=>{collectQuestionnaire();questionnaireDraft.splice(Math.max(0,questionnaireDraft.length-1),0,{id:'Q_'+crypto.randomUUID().slice(0,8),text:'پرسش جدید',goal:'هدف این پرسش را توضیح دهید',kind:'open',options:[],probe_limit:1,probe_hints:[],branches:{}});renderQuestionnaire();});
 
 const backupButton=document.createElement('button');backupButton.className='secondary hidden';backupButton.textContent='پشتیبان‌گیری';$('#export-data').before(backupButton);
 const backupPanel=document.createElement('section');backupPanel.className='card hidden';backupPanel.innerHTML='<h2>پشتیبان‌گیری و بازیابی</h2><p class="muted">هر روز یک نسخه کامل با بررسی سلامت پایگاه داده ذخیره می‌شود. برای محافظت در برابر از دست رفتن دیسک، نسخه را دانلود و خارج از لیارا نگهداری کنید.</p><button class="primary" id="backup-now">ساخت نسخه و بررسی سلامت</button><p id="backup-note" role="status"></p><div id="backup-list"></div>';$('#metrics').before(backupPanel);

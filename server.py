@@ -60,6 +60,10 @@ class QuestionConfig(BaseModel):
     kind: Literal['open', 'single', 'multiple'] = 'open'
     options: list[str] = Field(default_factory=list, max_length=50)
     probe_limit: int = Field(default=1, ge=0, le=5)
+    # Researcher-authored possibilities, not a forced script.  The semantic
+    # controller may use one only when the participant's answer leaves a
+    # necessary evidence gap for this exact question.
+    probe_hints: list[str] = Field(default_factory=list, max_length=12)
     branches: dict[str, str] = Field(default_factory=dict)
 
 
@@ -100,6 +104,11 @@ def require_admin(token):
         raise HTTPException(403, "فقط مدیر می‌تواند تنظیمات مصاحبه را تغییر دهد")
     return staff
 
+
+def require_editor(token):
+    """Protocol authors may edit/publish instruments; data exports stay admin-only."""
+    return _current_staff(token)
+
 def current_settings():
     with closing(sqlite3.connect(DB_PATH)) as db:
         row = db.execute("SELECT version,payload FROM settings_versions ORDER BY version DESC LIMIT 1").fetchone()
@@ -120,6 +129,8 @@ def settings_payload(body):
             raise HTTPException(422, 'انشعاب فقط برای تک‌گزینه‌ای فعال است')
         if any(answer not in q.options or target not in ids[index+1:] for answer,target in q.branches.items()):
             raise HTTPException(422, 'مقصد انشعاب باید پرسشی بعدی و پاسخ یکی از گزینه‌ها باشد')
+        if any(not hint.strip() or len(hint) > 1000 for hint in q.probe_hints):
+            raise HTTPException(422, 'هر پیشنهاد پیگیری باید غیرخالی و کوتاه باشد')
     if body.questionnaire[-1].kind != 'open' or body.questionnaire[-1].probe_limit != 0:
         raise HTTPException(422, 'آخرین پرسش دعوت پایانی باز با سقف پیگیری صفر باشد')
     pre_ids = [q.id for q in body.pre_interview_form]
@@ -603,7 +614,7 @@ def export_architecture_csv(body: ExportSelection, sharif_team_session: str | No
 
 @app.get("/admin/settings")
 def read_settings(sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
-    staff = require_admin(sharif_team_session)
+    staff = require_editor(sharif_team_session)
     result = current_settings()
     with closing(sqlite3.connect(DB_PATH)) as db:
         draft = db.execute("SELECT payload FROM settings_drafts WHERE author=?", (staff["username"],)).fetchone()
@@ -612,7 +623,7 @@ def read_settings(sharif_team_session: str | None = Cookie(default=None, alias=A
 
 @app.put("/admin/settings/draft")
 def save_draft(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
-    staff = require_admin(sharif_team_session)
+    staff = require_editor(sharif_team_session)
     settings_payload(body)
     with closing(sqlite3.connect(DB_PATH)) as db:
         db.execute("INSERT OR REPLACE INTO settings_drafts VALUES (?,?)", (staff["username"], body.model_dump_json()))
@@ -621,7 +632,7 @@ def save_draft(body: InterviewSettings, sharif_team_session: str | None = Cookie
 
 @app.post("/admin/settings/publish")
 def publish_settings(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
-    staff = require_admin(sharif_team_session)
+    staff = require_editor(sharif_team_session)
     payload = settings_payload(body)
     with closing(sqlite3.connect(DB_PATH)) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -635,7 +646,7 @@ def publish_settings(body: InterviewSettings, sharif_team_session: str | None = 
 
 @app.get("/admin/settings/versions/{version}")
 def settings_version(version: int, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
-    require_admin(sharif_team_session)
+    require_editor(sharif_team_session)
     with closing(sqlite3.connect(DB_PATH)) as db:
         row = db.execute("SELECT payload FROM settings_versions WHERE version=?", (version,)).fetchone()
     if not row:
@@ -736,7 +747,7 @@ def restore_backup(name: str, sharif_team_session: str | None = Cookie(default=N
 
 @app.post("/admin/settings/test")
 def test_settings(body: InterviewSettings, sharif_team_session: str | None = Cookie(default=None, alias=AUTH_COOKIE)):
-    require_admin(sharif_team_session)
+    require_editor(sharif_team_session)
     session = new_session()
     configure_session(session, settings_payload(body))
     session.is_test = True

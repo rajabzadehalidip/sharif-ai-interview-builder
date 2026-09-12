@@ -174,6 +174,9 @@ async function showDashboard() {
 }
 async function dashboardHome(staff) {
   hide("#staff-login"); reveal("#staff-home"); $("#staff-name").textContent = `${staff.username} · ${staff.role === "admin" ? "مدیر پژوهش" : "عضو تیم"}`;
+  document.body.dataset.staffRole = staff.role;
+  window.currentStaff = staff;
+  window.dispatchEvent(new CustomEvent('interview-builder-staff-ready', {detail: staff}));
   $("#export-data").classList.toggle("hidden", staff.role !== "admin");
   $("#export-csv").classList.toggle("hidden", staff.role !== "admin");
   $("#export-architecture").classList.toggle("hidden", staff.role !== "admin");

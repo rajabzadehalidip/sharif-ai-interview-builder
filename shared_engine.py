@@ -56,7 +56,7 @@ ACTIVE_SETTINGS = ContextVar("interview_settings", default={})
 ACTIVE_SESSION = ContextVar("active_interview", default=None)
 
 def default_questionnaire():
-    return [{"id": qid, "text": text, "goal": DEFAULT_GOALS[qid], "kind": "open", "options": [], "probe_limit": limit, "branches": {}} for qid, text, limit in DEFAULT_QUESTIONS]
+    return [{"id": qid, "text": text, "goal": DEFAULT_GOALS[qid], "kind": "open", "options": [], "probe_limit": limit, "probe_hints": [], "branches": {}} for qid, text, limit in DEFAULT_QUESTIONS]
 
 
 def default_pre_interview_form():
@@ -71,6 +71,11 @@ def questions():
 
 def question_goals():
     return {q["id"]: q["goal"] for q in questionnaire()}
+
+
+def question_probe_hints(question_id: str) -> list[str]:
+    item = next((q for q in questionnaire() if q["id"] == question_id), {})
+    return [str(hint).strip() for hint in item.get("probe_hints", []) if str(hint).strip()]
 
 def configure_session(session, settings, version=0):
     session.settings_snapshot = {**settings, "questionnaire": questionnaire(settings)}
@@ -473,7 +478,10 @@ def _model_decision(
         raise RuntimeError("GAPGPT_ENDPOINT or INTERVIEW_ENDPOINT is not configured")
     context = _model_context(session)
     qid, qtext, limit = questions()[session.question_index]
+    hints = question_probe_hints(qid)
     context += [f"\nپرسش جاری: {qid} — «{qtext}»", f"هدف پژوهشی همین پرسش: {question_goals()[qid]}", f"پیگیری این آیتم: {session.probe_count} از {limit}", f"پاسخ آخر فرد: «{answer}»"]
+    if hints:
+        context.append("پیشنهادهای پژوهشگر برای پیگیری (اختیاری‌اند؛ فقط در صورت شکاف ضروری و بدون تکرار استفاده کن):\n- " + "\n- ".join(hints))
     if prompt_override:
         context.append(prompt_override)
     active_mode = (mode or session.architecture or _architecture()).replace("-", "_").lower()
@@ -515,6 +523,7 @@ def _model_text(session: InterviewSession, answer: str, *, system: str, prompt: 
     if not _key():
         raise RuntimeError("provider API key is not configured")
     qid, qtext, limit = questions()[session.question_index]
+    hints = question_probe_hints(qid)
     context = _model_context(session) + [
         f"پرسش جاری: {qid} — «{qtext}»",
         f"هدف پژوهشی همین پرسش: {question_goals()[qid]}",
@@ -522,6 +531,8 @@ def _model_text(session: InterviewSession, answer: str, *, system: str, prompt: 
         f"پاسخ آخر فرد: «{answer}»",
         prompt,
     ]
+    if hints:
+        context.append("پیشنهادهای پیگیری پژوهشگر (در صورت ضرورت، نه به‌صورت اجباری):\n- " + "\n- ".join(hints))
     headers = {"Authorization": f"Bearer {_key()}", "Content-Type": "application/json", "X-Client-Request-ID": str(uuid.uuid4())}
     if _provider() == "openrouter":
         headers["X-Title"] = "AI Interview Builder"

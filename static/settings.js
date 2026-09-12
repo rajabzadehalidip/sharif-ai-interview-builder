@@ -48,6 +48,14 @@ document.querySelector('#staff-home .dashboard-head .actions').style.flexWrap = 
 document.querySelector('#config-model').style.direction = 'ltr';
 document.querySelector('#config-model').style.textAlign = 'left';
 
+function applyEditorAccess(staff) {
+  const canEdit = Boolean(staff && ['admin', 'team'].includes(staff.role));
+  settingsButton.classList.toggle('hidden', !canEdit);
+  preInterviewFormButton.classList.toggle('hidden', !canEdit);
+}
+window.addEventListener('interview-builder-staff-ready', event => applyEditorAccess(event.detail));
+if (window.currentStaff) applyEditorAccess(window.currentStaff);
+
 function settingsNote(text) { document.querySelector('#settings-note').textContent = text; }
 function fillSettings(config) {
   questionnaireDraft = structuredClone(config.questionnaire || []);
@@ -107,11 +115,6 @@ settingsPanel.querySelector('.settings-jump-nav').addEventListener('click', even
   const button = event.target.closest('[data-settings-jump]');
   if (button) jumpToSettingsSection(button.dataset.settingsJump);
 });
-new MutationObserver(() => {
-  const hidden = document.querySelector('#export-data').classList.contains('hidden');
-  settingsButton.classList.toggle('hidden', hidden);
-  preInterviewFormButton.classList.toggle('hidden', hidden);
-}).observe(document.querySelector('#export-data'), {attributes:true, attributeFilter:['class']});
 document.querySelector('#settings-form').addEventListener('submit', async event => {
   event.preventDefault();
   try { await api('/admin/settings/draft', {method:'PUT', body:JSON.stringify(editedSettings())}); settingsNote('پیش‌نویس ذخیره شد؛ مصاحبه عمومی تغییر نکرد.'); } catch(error) { settingsNote(error.message); }
