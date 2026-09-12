@@ -35,6 +35,10 @@ AUTH_MAX_AGE_SECONDS = 60 * 60 * 12
 
 class CreateSession(BaseModel):
     pre_interview: dict[str, str] = Field(default_factory=dict)
+    # The browser receives this version together with the consent and
+    # pre-interview form.  It prevents a participant who has kept an old tab
+    # open from starting with an old form and a newly-published questionnaire.
+    expected_settings_version: int | None = Field(default=None, ge=0)
 
 class Turn(BaseModel):
     text: str = Field(min_length=1, max_length=12000)
@@ -321,8 +325,12 @@ def public_pre_interview_form():
 
 @app.get('/public/project')
 def public_project():
-    settings = current_settings()['settings']
-    return {key: settings.get(key) for key in ('project_title', 'welcome_text', 'consent_text', 'participant_language')}
+    config = current_settings()
+    settings = config['settings']
+    return {
+        "version": config['version'],
+        **{key: settings.get(key) for key in ('project_title', 'welcome_text', 'consent_text', 'participant_language')},
+    }
 
 
 @app.get('/admin/settings/pre-interview-default')
@@ -332,10 +340,15 @@ def pre_interview_defaults(sharif_team_session: str | None = Cookie(default=None
 
 @app.post("/sessions")
 def create_session(body: CreateSession):
-    session = new_session(body.pre_interview)
     config = current_settings()
+    if body.expected_settings_version is not None and body.expected_settings_version != config['version']:
+        raise HTTPException(
+            409,
+            'نسخهٔ فرم و پرسشنامه تغییر کرده است. برای دریافت نسخهٔ جدید، صفحه را تازه‌سازی کنید.',
+        )
     if any(question['text'].strip().startswith('[پرسش') for question in config['settings']['questionnaire']):
         raise HTTPException(503, 'این پروژه هنوز منتشر نشده است. ابتدا پروتکل را از پنل پژوهشگر تکمیل و منتشر کنید.')
+    session = new_session(body.pre_interview)
     configure_session(session, config['settings'], config['version'])
     save(session)
     return participant_view(session)

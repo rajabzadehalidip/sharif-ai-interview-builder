@@ -16,7 +16,7 @@ settingsPanel.className = 'card hidden';
 settingsPanel.style.marginBottom = '24px';
 settingsPanel.innerHTML = `
   <h2>ساخت و انتشار پروتکل</h2>
-  <p class="muted">این پروژه از محتوای آماده شروع نمی‌کند. ابتدا عنوان، متن رضایت، دستورالعمل‌ها و پرسش‌های خودتان را تکمیل کنید؛ سپس یک نسخه منتشر کنید. انتشار فقط بر مصاحبه‌های جدید اثر دارد.</p>
+  <p class="muted">این پروژه از محتوای آماده شروع نمی‌کند. ابتدا عنوان، متن رضایت، دستورالعمل‌ها و پرسش‌های خودتان را تکمیل کنید؛ سپس یک نسخه منتشر کنید. انتشار بلافاصله برای هر مصاحبهٔ جدید فعال می‌شود؛ مصاحبه‌های شروع‌شده نسخهٔ خود را حفظ می‌کنند تا داده‌هایشان تغییر نکند.</p>
   <p id="settings-version" class="muted"></p>
   <nav class="settings-jump-nav" aria-label="بخش‌های تنظیمات">
     <button type="button" class="quiet" data-settings-jump="settings-core">پروژه، مدل و دستورالعمل‌ها</button>
@@ -126,7 +126,7 @@ document.querySelector('#settings-publish').addEventListener('click', async () =
     if (!confirm('این تنظیمات برای همه مصاحبه‌های جدید منتشر شود؟')) return;
     button.disabled = true;
     const result = await api('/admin/settings/publish', {method:'POST', body:JSON.stringify(config)});
-    await openSettings(); settingsNote(`نسخه ${result.version} منتشر شد. مصاحبه‌های در جریان تغییری نمی‌کنند.`);
+    await openSettings(); settingsNote(`نسخه ${result.version} منتشر شد و همین حالا برای مصاحبه‌های جدید فعال است. مصاحبه‌های در جریان تغییری نمی‌کنند.`);
   } catch(error) { settingsNote(error.message); } finally { button.disabled = false; }
 });
 document.querySelector('#settings-history').addEventListener('click', async event => {

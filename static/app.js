@@ -1,14 +1,16 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { pre: {}, preForm: [], step: 0, session: null, pendingTurn: null, waiting: false };
+const state = { pre: {}, preForm: [], protocolVersion: null, step: 0, session: null, pendingTurn: null, waiting: false };
 function visiblePreQuestions() {
   return state.preForm.filter(question => !question.visible_if_id || (question.visible_if_answers || []).includes(state.pre[question.visible_if_id]));
 }
 async function loadPreInterviewForm() {
   const data = await api('/public/pre-interview-form');
   state.preForm = Array.isArray(data.questions) ? data.questions : [];
+  state.protocolVersion = Number.isInteger(data.version) ? data.version : null;
 }
 async function loadProject() {
   const project = await api('/public/project');
+  if (Number.isInteger(project.version)) state.protocolVersion = project.version;
   const title = project.project_title || 'مصاحبه پژوهشی';
   document.title = title;
   ['#header-project-title','#project-title','#chat-project-title'].forEach(selector => { const element=$(selector); if (element) element.textContent=title; });
@@ -90,9 +92,16 @@ async function startInterview() {
   $("#pre-next").disabled = true;
   try {
     const preInterview = Object.fromEntries(visiblePreQuestions().filter(question => state.pre[question.id]).map(question => [question.text, state.pre[question.id]]));
-    state.session = await api("/sessions", {method:"POST",body:JSON.stringify({pre_interview:preInterview})}); localStorage.setItem("interview-builder-id", state.session.id); hide("#pre-form"); reveal("#chat"); renderChat();
+    state.session = await api("/sessions", {method:"POST",body:JSON.stringify({pre_interview:preInterview, expected_settings_version:state.protocolVersion})}); localStorage.setItem("interview-builder-id", state.session.id); hide("#pre-form"); reveal("#chat"); renderChat();
   }
-  catch (error) { alert(error.message); } finally { $("#pre-next").disabled = false; }
+  catch (error) {
+    if (error.status === 409) {
+      alert(`${error.message}\n\nصفحه اکنون با نسخهٔ منتشرشدهٔ جدید بارگذاری می‌شود.`);
+      location.reload();
+      return;
+    }
+    alert(error.message);
+  } finally { $("#pre-next").disabled = false; }
 }
 function renderChat() {
   if (!state.session) return;
